@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+chain.json
+reputation.json
+.worktrees/
+.commit-msg-tmp

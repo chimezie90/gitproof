@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autoblockchain — Chain Dashboard</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface-2: #1a1a28;
+    --border: #2a2a3a;
+    --text: #e0e0e8;
+    --text-dim: #8888a0;
+    --accent: #6c5ce7;
+    --accent-glow: rgba(108, 92, 231, 0.3);
+    --green: #00e676;
+    --green-dim: rgba(0, 230, 118, 0.15);
+    --red: #ff5252;
+    --red-dim: rgba(255, 82, 82, 0.15);
+    --yellow: #ffd740;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+    --sans: 'Inter', -apple-system, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .header {
+    padding: 32px 40px 24px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0f0f18 0%, var(--bg) 100%);
+  }
+
+  .header h1 {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #fff 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .header p {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-top: 6px;
+  }
+
+  /* Stats bar */
+  .stats-bar {
+    display: flex;
+    gap: 32px;
+    padding: 20px 40px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 32px;
+    font-weight: 700;
+  }
+
+  .stat-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .stat-value.green { color: var(--green); }
+  .stat-value.red { color: var(--red); }
+  .stat-value.accent { color: var(--accent); }
+
+  /* Main layout */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 420px;
+    min-height: calc(100vh - 160px);
+  }
+
+  /* DAG */
+  .dag-section {
+    padding: 32px 40px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+  }
+
+  .dag-section h2 {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 24px;
+  }
+
+  .dag-node {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px;
+    margin-bottom: 2px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    position: relative;
+  }
+
+  .dag-node:hover { background: var(--surface-2); }
+  .dag-node.selected { background: var(--surface-2); outline: 1px solid var(--accent); }
+
+  .dag-connector {
+    position: absolute;
+    left: 32px;
+    top: -2px;
+    width: 2px;
+    height: 18px;
+    background: var(--border);
+  }
+
+  .dag-node:first-child .dag-connector { display: none; }
+
+  .dag-dot {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 2px;
+    position: relative;
+    z-index: 1;
+  }
+
+  .dag-dot.accepted {
+    background: var(--green);
+    box-shadow: 0 0 12px rgba(0, 230, 118, 0.4);
+  }
+
+  .dag-dot.rejected {
+    background: var(--red);
+    box-shadow: 0 0 12px rgba(255, 82, 82, 0.4);
+  }
+
+  .dag-info { flex: 1; min-width: 0; }
+
+  .dag-hash {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+  }
+
+  .dag-target {
+    font-size: 14px;
+    margin-top: 4px;
+    color: var(--text);
+  }
+
+  .dag-delta {
+    font-family: var(--mono);
+    font-size: 13px;
+    margin-top: 4px;
+  }
+
+  .dag-delta.positive { color: var(--green); }
+  .dag-delta.negative { color: var(--red); }
+
+  .dag-time {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  /* Detail panel */
+  .detail-panel {
+    padding: 32px 24px;
+    overflow-y: auto;
+    background: var(--surface);
+  }
+
+  .detail-panel h2 {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 20px;
+  }
+
+  .detail-empty {
+    color: var(--text-dim);
+    font-size: 14px;
+    text-align: center;
+    padding-top: 100px;
+  }
+
+  .detail-section {
+    margin-bottom: 24px;
+  }
+
+  .detail-section h3 {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .intent-badge {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .intent-badge.accepted { background: var(--green-dim); color: var(--green); }
+  .intent-badge.rejected { background: var(--red-dim); color: var(--red); }
+
+  .metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(42, 42, 58, 0.5);
+  }
+
+  .metric-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .metric-values {
+    text-align: right;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .metric-change { font-weight: 600; }
+  .metric-change.improved { color: var(--green); }
+  .metric-change.regressed { color: var(--red); }
+  .metric-change.neutral { color: var(--text-dim); }
+
+  .metric-abs {
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
+  .anomaly-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    background: var(--red-dim);
+    color: var(--red);
+    margin-left: 8px;
+  }
+
+  .guardrail-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    background: rgba(108, 92, 231, 0.15);
+    color: var(--accent);
+    margin-left: 8px;
+  }
+
+  .target-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 11px;
+    background: rgba(255, 215, 64, 0.15);
+    color: var(--yellow);
+    margin-left: 8px;
+  }
+
+  .reason-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .reason-list li {
+    padding: 6px 12px;
+    margin-bottom: 4px;
+    background: var(--red-dim);
+    border-left: 3px solid var(--red);
+    border-radius: 0 4px 4px 0;
+    font-size: 13px;
+    color: var(--red);
+  }
+
+  /* Charts section */
+  .charts-section {
+    padding: 32px 40px;
+    border-top: 1px solid var(--border);
+    grid-column: 1 / -1;
+  }
+
+  .charts-section h2 {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 24px;
+  }
+
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+  }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+
+  .chart-card h3 {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .chart-card .chart-subtitle {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 16px;
+  }
+
+  .chart-canvas {
+    width: 100%;
+    height: 120px;
+  }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 100px 40px;
+    grid-column: 1 / -1;
+  }
+
+  .empty-state h2 {
+    font-family: var(--mono);
+    font-size: 22px;
+    margin-bottom: 12px;
+    color: var(--text);
+  }
+
+  .empty-state p {
+    color: var(--text-dim);
+    font-size: 14px;
+    max-width: 500px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  .empty-state code {
+    display: block;
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    text-align: left;
+    max-width: 500px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  /* Load button */
+  .load-section {
+    padding: 12px 40px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .load-btn {
+    padding: 8px 16px;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 13px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .load-btn:hover { opacity: 0.85; }
+
+  .load-info {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  #file-input { display: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>autoblockchain</h1>
+  <p>Proof-of-Useful-Work Chain Dashboard — verified autonomous software improvement</p>
+</div>
+
+<div class="stats-bar">
+  <div class="stat">
+    <span class="stat-value accent" id="stat-total">0</span>
+    <span class="stat-label">Proposed</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value green" id="stat-accepted">0</span>
+    <span class="stat-label">Accepted</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value red" id="stat-rejected">0</span>
+    <span class="stat-label">Rejected</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value" id="stat-rate" style="color: var(--text);">—</span>
+    <span class="stat-label">Accept Rate</span>
+  </div>
+</div>
+
+<div class="load-section">
+  <button class="load-btn" onclick="document.getElementById('file-input').click()">Load chain.json</button>
+  <span class="load-info">Or drag & drop chain.json onto this page</span>
+  <input type="file" id="file-input" accept=".json" onchange="handleFile(this.files[0])">
+</div>
+
+<div class="main" id="main-content">
+  <div class="empty-state" id="empty-state">
+    <h2>No chain data loaded</h2>
+    <p>Run the verifier on some commits, then load chain.json to see the results.</p>
+    <code>python verifier.py verify &lt;commit-hash&gt;<br>open viewer.html</code>
+  </div>
+</div>
+
+<script>
+let chainData = [];
+let selectedIdx = null;
+
+// Drag & drop
+document.body.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); });
+document.body.addEventListener('drop', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      chainData = JSON.parse(e.target.result);
+      render();
+    } catch (err) {
+      alert('Invalid JSON: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Try to auto-load chain.json (works if served from same directory)
+fetch('chain.json')
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(data => { chainData = data; render(); })
+  .catch(() => {});
+
+function render() {
+  const total = chainData.length;
+  const accepted = chainData.filter(v => v.accepted).length;
+  const rejected = total - accepted;
+
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-accepted').textContent = accepted;
+  document.getElementById('stat-rejected').textContent = rejected;
+  document.getElementById('stat-rate').textContent = total ? Math.round(accepted / total * 100) + '%' : '—';
+
+  if (total === 0) return;
+
+  const mainEl = document.getElementById('main-content');
+
+  // Build DAG + detail panel + charts
+  mainEl.innerHTML = `
+    <div class="dag-section">
+      <h2>Verification Chain</h2>
+      <div id="dag-list"></div>
+    </div>
+    <div class="detail-panel" id="detail-panel">
+      <h2>Commit Detail</h2>
+      <div class="detail-empty">Select a commit to inspect</div>
+    </div>
+    <div class="charts-section">
+      <h2>Performance Timeline</h2>
+      <div class="charts-grid" id="charts-grid"></div>
+    </div>
+  `;
+
+  renderDAG();
+  renderCharts();
+}
+
+function renderDAG() {
+  const list = document.getElementById('dag-list');
+  list.innerHTML = '';
+
+  // Show newest first
+  for (let i = chainData.length - 1; i >= 0; i--) {
+    const v = chainData[i];
+    const status = v.accepted ? 'accepted' : 'rejected';
+    const intent = v.intent || {};
+    const innerIntent = intent.intent || {};
+    const targetMetric = innerIntent.target_metric || '?';
+    const targetDir = innerIntent.target_direction || '?';
+    const delta = v.target_delta_pct;
+
+    const node = document.createElement('div');
+    node.className = `dag-node${selectedIdx === i ? ' selected' : ''}`;
+    node.onclick = () => selectNode(i);
+
+    let deltaHtml = '';
+    if (delta !== undefined) {
+      const cls = v.accepted ? 'positive' : 'negative';
+      const sign = delta > 0 ? '+' : '';
+      deltaHtml = `<div class="dag-delta ${cls}">${sign}${delta}% ${targetDir === 'decrease' ? '(faster)' : '(higher)'}</div>`;
+    }
+
+    node.innerHTML = `
+      ${i < chainData.length - 1 ? '<div class="dag-connector"></div>' : ''}
+      <div class="dag-dot ${status}"></div>
+      <div class="dag-info">
+        <div class="dag-hash">${(v.commit || '').slice(0, 12)}${v.author ? ` <span style="color:var(--text-dim)">by ${escHtml(v.author)}</span>` : ''}</div>
+        <div class="dag-target">${targetMetric}</div>
+        ${deltaHtml}
+        <div class="dag-time">${v.timestamp || ''}</div>
+      </div>
+    `;
+    list.appendChild(node);
+  }
+}
+
+function selectNode(idx) {
+  selectedIdx = idx;
+  renderDAG();
+  renderDetail(chainData[idx]);
+}
+
+function renderDetail(v) {
+  const panel = document.getElementById('detail-panel');
+  const intent = v.intent || {};
+  const innerIntent = intent.intent || {};
+  const guardrails = intent.guardrails || [];
+  const status = v.accepted ? 'accepted' : 'rejected';
+
+  let html = `<h2>Commit Detail</h2>`;
+
+  // Status badge
+  html += `<div class="detail-section">
+    <span class="intent-badge ${status}">${status.toUpperCase()}</span>
+    <span style="margin-left: 12px; font-family: var(--mono); font-size: 13px; color: var(--accent);">${(v.commit || '').slice(0, 12)}</span>
+  </div>`;
+
+  // Author
+  if (v.author) {
+    html += `<div class="detail-section">
+      <h3>Author</h3>
+      <div class="metric-row">
+        <span class="metric-name">${escHtml(v.author)}</span>
+        <span class="metric-values"><span class="metric-change neutral">${getRepBadge(v.author)}</span></span>
+      </div>
+    </div>`;
+  }
+
+  // Intent
+  html += `<div class="detail-section">
+    <h3>Intent Declaration</h3>
+    <div class="metric-row">
+      <span class="metric-name">Target</span>
+      <span class="metric-values"><span class="metric-change neutral">${innerIntent.target_metric || '?'}</span></span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-name">Direction</span>
+      <span class="metric-values"><span class="metric-change neutral">${innerIntent.target_direction || '?'}</span></span>
+    </div>
+    <div class="metric-row">
+      <span class="metric-name">Min Delta</span>
+      <span class="metric-values"><span class="metric-change neutral">${innerIntent.minimum_delta ? (innerIntent.minimum_delta * 100).toFixed(0) + '%' : '?'}</span></span>
+    </div>
+  </div>`;
+
+  // Rejection reasons
+  if (v.rejection_reasons && v.rejection_reasons.length) {
+    html += `<div class="detail-section">
+      <h3>Rejection Reasons</h3>
+      <ul class="reason-list">${v.rejection_reasons.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>
+    </div>`;
+  }
+
+  // Metric deltas
+  if (v.deltas) {
+    const declaredGuardrails = new Set(guardrails.map(g => g.metric));
+    html += `<div class="detail-section"><h3>Metric Deltas</h3>`;
+    for (const [metric, d] of Object.entries(v.deltas)) {
+      const changePct = d.change_pct;
+      let cls = 'neutral';
+      if (Math.abs(changePct) > 1) cls = changePct < 0 ? 'improved' : 'regressed';
+
+      let tags = '';
+      if (metric === innerIntent.target_metric) tags += '<span class="target-tag">TARGET</span>';
+      if (declaredGuardrails.has(metric)) tags += '<span class="guardrail-tag">GUARDRAIL</span>';
+      const isAnomaly = (v.anomalies || []).some(a => a.metric === metric);
+      if (isAnomaly) tags += '<span class="anomaly-tag">ANOMALY</span>';
+
+      html += `<div class="metric-row">
+        <span class="metric-name">${metric}${tags}</span>
+        <span class="metric-values">
+          <div class="metric-change ${cls}">${changePct > 0 ? '+' : ''}${changePct}%</div>
+          <div class="metric-abs">${d.baseline.toFixed(4)}s → ${d.result.toFixed(4)}s</div>
+        </span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  panel.innerHTML = html;
+}
+
+function getRepBadge(author) {
+  // Compute simple reputation from chain data
+  let score = 0;
+  let accepted = 0;
+  let rejected = 0;
+  chainData.forEach(v => {
+    if ((v.author || 'unknown') === author) {
+      if (v.accepted) {
+        score += Math.min(Math.abs(v.target_delta_pct || 0) / 100, 1.0);
+        accepted++;
+      } else {
+        score = Math.max(0, score - 0.5);
+        rejected++;
+      }
+    }
+  });
+  const tiers = [[10, 'Core'], [3, 'Trusted'], [1, 'Contributor'], [0, 'Newcomer']];
+  let tier = 'Newcomer';
+  for (const [threshold, name] of tiers) {
+    if (score >= threshold) { tier = name; break; }
+  }
+  return `${score.toFixed(2)} (${tier}) ${accepted}A/${rejected}R`;
+}
+
+function renderCharts() {
+  const grid = document.getElementById('charts-grid');
+  if (!grid) return;
+
+  // Collect all metrics across accepted entries
+  const metrics = new Set();
+  chainData.forEach(v => {
+    if (v.result) Object.keys(v.result).forEach(k => metrics.add(k));
+  });
+
+  grid.innerHTML = '';
+  for (const metric of metrics) {
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+
+    // Get data points (all entries, not just accepted)
+    const points = [];
+    chainData.forEach((v, i) => {
+      if (v.result && v.result[metric] !== undefined) {
+        points.push({ idx: i, value: v.result[metric], accepted: v.accepted });
+      }
+    });
+
+    if (points.length === 0) continue;
+
+    const firstVal = points[0].value;
+    const lastVal = points[points.length - 1].value;
+    const changePct = firstVal ? ((lastVal - firstVal) / firstVal * 100).toFixed(1) : 0;
+    const improved = lastVal < firstVal;
+
+    card.innerHTML = `
+      <h3>${metric}</h3>
+      <div class="chart-subtitle">${improved ? 'Improved' : 'Changed'} ${Math.abs(changePct)}% over ${points.length} commits</div>
+      <canvas class="chart-canvas" id="chart-${metric}"></canvas>
+    `;
+    grid.appendChild(card);
+
+    // Draw mini chart
+    requestAnimationFrame(() => drawChart(`chart-${metric}`, points));
+  }
+}
+
+function drawChart(canvasId, points) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const h = rect.height;
+  const pad = { top: 8, right: 8, bottom: 8, left: 8 };
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+
+  const values = points.map(p => p.value);
+  const minV = Math.min(...values) * 0.9;
+  const maxV = Math.max(...values) * 1.1;
+  const range = maxV - minV || 1;
+
+  function x(i) { return pad.left + (points.length > 1 ? i / (points.length - 1) : 0.5) * plotW; }
+  function y(v) { return pad.top + (1 - (v - minV) / range) * plotH; }
+
+  // Area fill
+  const gradient = ctx.createLinearGradient(0, pad.top, 0, h - pad.bottom);
+  gradient.addColorStop(0, 'rgba(108, 92, 231, 0.25)');
+  gradient.addColorStop(1, 'rgba(108, 92, 231, 0.02)');
+
+  ctx.beginPath();
+  ctx.moveTo(x(0), h - pad.bottom);
+  points.forEach((p, i) => ctx.lineTo(x(i), y(p.value)));
+  ctx.lineTo(x(points.length - 1), h - pad.bottom);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  points.forEach((p, i) => {
+    if (i === 0) ctx.moveTo(x(i), y(p.value));
+    else ctx.lineTo(x(i), y(p.value));
+  });
+  ctx.strokeStyle = '#6c5ce7';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Dots
+  points.forEach((p, i) => {
+    ctx.beginPath();
+    ctx.arc(x(i), y(p.value), 4, 0, Math.PI * 2);
+    ctx.fillStyle = p.accepted ? '#00e676' : '#ff5252';
+    ctx.fill();
+    ctx.strokeStyle = var_bg;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+}
+
+// Helper to avoid the var() in JS
+const var_bg = '#0a0a0f';
+
+function escHtml(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>

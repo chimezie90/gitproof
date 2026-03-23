@@ -1,0 +1,98 @@
+# Autoblockchain Intent Declaration Schema
+# Every commit must include this as YAML frontmatter in the commit message.
+
+# Example commit message:
+#
+#   ---
+#   intent:
+#     target_metric: bench_matrix_multiply
+#     target_direction: decrease
+#     minimum_delta: 0.15
+#   guardrails:
+#     - metric: bench_prime_sieve
+#       constraint: "< 1.05"
+#     - metric: memory_peak_mb
+#       constraint: "< 512"
+#   ---
+#
+#   Cache-aware blocking for matrix multiply
+#
+#   Restructured the inner loop to process 64x64 blocks that fit in L1 cache.
+#   Expected ~40% speedup on large matrices with minimal memory overhead.
+
+type: object
+required: [intent]
+properties:
+
+  author:
+    type: string
+    description: >
+      Worker identifier for reputation tracking.
+      Can be any string: agent name, team name, or individual.
+      If omitted, the verifier uses the git commit author.
+      Reputation is tied to this identifier, not to a person.
+
+  intent:
+    type: object
+    required: [target_metric, target_direction, minimum_delta]
+    properties:
+      target_metric:
+        type: string
+        description: >
+          The benchmark metric this commit aims to improve.
+          Must match a metric name returned by `python -m benchmarks.bench`.
+          Examples: bench_matrix_multiply, bench_prime_sieve, bench_json_parse
+      target_direction:
+        type: string
+        enum: [increase, decrease]
+        description: >
+          Whether the target metric should go up or down.
+          For benchmark times: "decrease" (lower = faster).
+          For accuracy metrics: "increase" (higher = better).
+      minimum_delta:
+        type: number
+        minimum: 0.01
+        description: >
+          Minimum relative improvement claimed, as a fraction.
+          0.15 = "at least 15% improvement".
+          The verifier will reject if the actual delta is less than this.
+
+  guardrails:
+    type: array
+    items:
+      type: object
+      required: [metric, constraint]
+      properties:
+        metric:
+          type: string
+          description: >
+            A metric the author knows might be affected.
+            Declaring guardrails is an act of intellectual honesty:
+            "I checked these, and they're within bounds."
+        constraint:
+          type: string
+          description: >
+            A constraint expression evaluated against the metric value.
+            The value is expressed as a ratio to baseline (1.0 = unchanged).
+            Examples:
+              "< 1.05"   — must not regress by more than 5%
+              "< 1.0"    — must not regress at all
+              "> 0.8"    — must retain at least 80% of baseline performance
+    description: >
+      Metrics the author explicitly checked and claims are safe.
+      The verifier measures these AND everything else.
+      Undeclared metrics that move significantly trigger anomaly detection.
+
+  evidence:
+    type: object
+    properties:
+      baseline_hash:
+        type: string
+        description: SHA-256 hash of baseline benchmark results
+      result_hash:
+        type: string
+        description: SHA-256 hash of post-change benchmark results
+    description: >
+      Optional in the commit message (the verifier computes its own).
+      If provided, the verifier checks that its results match,
+      confirming reproducibility.

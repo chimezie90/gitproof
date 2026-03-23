@@ -175,6 +175,10 @@ The verification protocol has four layers of defense:
 
 Covers: the coordination problem, commits as hypotheses, the side effects problem, architecture, reputation, and proof of useful work.
 
+## Roadmap
+
+Execution roadmap and milestone priorities live in **[ROADMAP.md](ROADMAP.md)**.
+
 ---
 
 *Emmanuel Chimezie / Mexkoy — March 2026*

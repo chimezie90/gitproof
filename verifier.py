@@ -9,6 +9,7 @@ Writes results to chain.json. Exit 0 = accepted, exit 1 = rejected.
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -17,7 +18,11 @@ import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CHAIN_FILE = os.path.join(SCRIPT_DIR, "chain.json")
+CHAIN_LOCK_FILE = f"{CHAIN_FILE}.lock"
 ANOMALY_THRESHOLD = 0.10  # 10% undeclared movement = flagged
+TARGET_DIRECTIONS = {"increase", "decrease"}
+METRIC_NAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,128}$")
+CONSTRAINT_RE = re.compile(r"^(<=|<|>=|>)\s*([0-9]+(?:\.[0-9]+)?)$")
 
 def _get_git_root():
     """Find the actual git repository root."""
@@ -39,6 +44,69 @@ def _repo_root():
     if REPO_ROOT is None:
         REPO_ROOT = _get_git_root()
     return REPO_ROOT
+
+
+def _execution_config():
+    """Execution mode for running untrusted benchmark code."""
+    mode = os.environ.get("GITPROOF_SANDBOX_MODE", "local").strip().lower() or "local"
+    return {
+        "mode": mode,
+        "docker_image": os.environ.get("GITPROOF_SANDBOX_DOCKER_IMAGE", "python:3.12-slim").strip(),
+        "custom_runner": os.environ.get("GITPROOF_SANDBOX_RUNNER", "").strip(),
+    }
+
+
+def _run_python(py_args, workdir, timeout):
+    """Run Python code either locally or inside a sandbox runner."""
+    config = _execution_config()
+    mode = config["mode"]
+
+    if mode == "local":
+        cmd = [sys.executable] + py_args
+        cwd = workdir
+    elif mode == "docker":
+        if shutil.which("docker") is None:
+            raise RuntimeError("Sandbox mode 'docker' requested but docker is not installed.")
+        image = config["docker_image"] or "python:3.12-slim"
+        host_dir = os.path.abspath(workdir)
+        container_dir = "/workspace"
+        cmd = [
+            "docker", "run", "--rm",
+            "--network", "none",
+            "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--pids-limit", "256",
+            "--memory", "1g",
+            "--cpus", "1.0",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
+            "-e", "PYTHONDONTWRITEBYTECODE=1",
+            "-v", f"{host_dir}:{container_dir}:ro",
+            "-w", container_dir,
+            image,
+            "python3",
+        ] + py_args
+        cwd = None
+    elif mode == "custom":
+        runner = config["custom_runner"]
+        if not runner:
+            raise RuntimeError(
+                "Sandbox mode 'custom' requested but GITPROOF_SANDBOX_RUNNER is not set."
+            )
+        cmd = shlex.split(runner) + [sys.executable] + py_args
+        cwd = workdir
+    else:
+        raise RuntimeError(
+            f"Unknown sandbox mode '{mode}'. Use one of: local, docker, custom."
+        )
+
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        timeout=timeout,
+    )
 
 
 def parse_yaml_frontmatter(commit_msg):
@@ -202,6 +270,104 @@ def parse_yaml_value(s):
     return s
 
 
+def _clean_metric_name(value):
+    if not isinstance(value, str):
+        return None
+    metric = value.strip()
+    if not metric or not METRIC_NAME_RE.fullmatch(metric):
+        return None
+    return metric
+
+
+def _parse_minimum_delta(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed < 0.01:
+        return None
+    return parsed
+
+
+def _clean_constraint(value):
+    if not isinstance(value, str):
+        return None
+    compact = " ".join(value.strip().split())
+    if not CONSTRAINT_RE.fullmatch(compact):
+        return None
+    return compact
+
+
+def validate_intent_schema(intent_data):
+    """Strict schema validation for commit intent frontmatter."""
+    if not isinstance(intent_data, dict):
+        return None, "Intent frontmatter must be a YAML object."
+
+    intent = intent_data.get("intent")
+    if not isinstance(intent, dict):
+        return None, "Field 'intent' must be a YAML object."
+
+    target_metric = _clean_metric_name(intent.get("target_metric"))
+    if not target_metric:
+        return None, (
+            "Field 'intent.target_metric' must be a non-empty metric name "
+            "(letters, numbers, _, ., -)."
+        )
+
+    target_direction = intent.get("target_direction")
+    if target_direction not in TARGET_DIRECTIONS:
+        return None, "Field 'intent.target_direction' must be one of: increase, decrease."
+
+    minimum_delta = _parse_minimum_delta(intent.get("minimum_delta"))
+    if minimum_delta is None:
+        return None, "Field 'intent.minimum_delta' must be a number >= 0.01."
+
+    raw_guardrails = intent_data.get("guardrails", [])
+    if raw_guardrails is None:
+        raw_guardrails = []
+    if not isinstance(raw_guardrails, list):
+        return None, "Field 'guardrails' must be a list."
+
+    guardrails = []
+    seen_guardrails = set()
+    for idx, entry in enumerate(raw_guardrails):
+        if not isinstance(entry, dict):
+            return None, f"Guardrail #{idx + 1} must be an object with metric/constraint."
+
+        metric = _clean_metric_name(entry.get("metric"))
+        if not metric:
+            return None, f"Guardrail #{idx + 1} has invalid 'metric'."
+
+        constraint = _clean_constraint(entry.get("constraint"))
+        if not constraint:
+            return None, (
+                f"Guardrail #{idx + 1} has invalid 'constraint'. "
+                "Use format like '< 1.05' or '>= 0.9'."
+            )
+
+        if metric in seen_guardrails:
+            return None, f"Guardrail metric '{metric}' is duplicated."
+        seen_guardrails.add(metric)
+        guardrails.append({"metric": metric, "constraint": constraint})
+
+    normalized = {
+        "intent": {
+            "target_metric": target_metric,
+            "target_direction": target_direction,
+            "minimum_delta": minimum_delta,
+        },
+        "guardrails": guardrails,
+    }
+
+    author = intent_data.get("author")
+    if author is not None:
+        if not isinstance(author, str) or not author.strip():
+            return None, "Field 'author' must be a non-empty string when provided."
+        normalized["author"] = author.strip()
+
+    return normalized, None
+
+
 def git_show_message(commit_hash):
     """Get the full commit message for a commit."""
     result = subprocess.run(
@@ -270,10 +436,7 @@ def run_benchmarks_at(commit_hash):
     """Run benchmarks using functions.py from a specific commit. Returns metrics dict."""
     tmpdir = _setup_workdir(commit_hash)
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.bench"],
-            capture_output=True, text=True, cwd=tmpdir, timeout=120
-        )
+        result = _run_python(["-m", "benchmarks.bench"], tmpdir, timeout=120)
         if result.returncode != 0:
             raise RuntimeError(f"Benchmarks failed at {commit_hash[:8]}: {result.stderr}")
         return json.loads(result.stdout)
@@ -285,10 +448,7 @@ def run_tests_at(commit_hash):
     """Run correctness tests using functions.py from a specific commit."""
     tmpdir = _setup_workdir(commit_hash)
     try:
-        result = subprocess.run(
-            [sys.executable, "-m", "benchmarks.tests"],
-            capture_output=True, text=True, cwd=tmpdir, timeout=60
-        )
+        result = _run_python(["-m", "benchmarks.tests"], tmpdir, timeout=60)
         return result.returncode == 0, result.stdout, result.stderr
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -322,12 +482,15 @@ def run_comparison_benchmarks(parent_hash, commit_hash):
     with open(commit_path, "w") as f:
         f.write(commit_src)
 
-    runner_script = os.path.join(SCRIPT_DIR, "compare_runner.py")
+    # Keep runner inside temp workspace so sandboxed runners only need this mount.
+    tmp_runner_script = os.path.join(tmpdir, "compare_runner.py")
+    shutil.copy2(os.path.join(SCRIPT_DIR, "compare_runner.py"), tmp_runner_script)
 
     try:
-        res = subprocess.run(
-            [sys.executable, runner_script, parent_path, commit_path],
-            capture_output=True, text=True, cwd=tmpdir, timeout=180
+        res = _run_python(
+            ["compare_runner.py", "functions_baseline.py", "functions_result.py"],
+            tmpdir,
+            timeout=180,
         )
         if res.returncode != 0:
             raise RuntimeError(f"Comparison benchmarks failed: {res.stderr}")
@@ -342,9 +505,11 @@ def evaluate_constraint(constraint_str, value, baseline_value):
     The constraint is evaluated against the ratio (value / baseline).
     e.g., '< 1.05' means the metric must not be more than 5% worse than baseline.
     """
+    if not isinstance(constraint_str, str):
+        return False, "Constraint must be a string"
     ratio = value / baseline_value if baseline_value != 0 else float("inf")
     # Parse constraint: "< 1.05", "> 0.8", etc.
-    match = re.match(r"([<>]=?)\s*([\d.]+)", constraint_str)
+    match = CONSTRAINT_RE.fullmatch(" ".join(constraint_str.split()))
     if not match:
         return False, f"Invalid constraint format: {constraint_str}"
     op, threshold = match.groups()
@@ -364,10 +529,14 @@ def evaluate_constraint(constraint_str, value, baseline_value):
 
 def verify(commit_hash):
     """Run the full verification protocol on a commit. Returns verdict dict."""
+    sandbox_mode = _execution_config()["mode"]
     print(f"\n{'='*60}")
     print(f"AUTOBLOCKCHAIN VERIFIER")
     print(f"{'='*60}")
     print(f"Verifying commit: {commit_hash[:12]}")
+    print(f"Execution mode: {sandbox_mode}")
+    if sandbox_mode == "local":
+        print("Warning: local mode executes worker code on host. Use docker/custom for untrusted workers.")
 
     # Step 0: Parse intent from commit message
     msg = git_show_message(commit_hash)
@@ -376,6 +545,10 @@ def verify(commit_hash):
     intent_data = parse_yaml_frontmatter(msg)
     if not intent_data:
         return reject(commit_hash, msg, "No intent declaration found in commit message (YAML frontmatter between --- markers)")
+
+    intent_data, schema_error = validate_intent_schema(intent_data)
+    if schema_error:
+        return reject(commit_hash, msg, f"Invalid intent declaration schema: {schema_error}")
 
     intent = intent_data.get("intent", {})
     guardrails = intent_data.get("guardrails", [])
@@ -392,10 +565,8 @@ def verify(commit_hash):
         )
         author = author_result.stdout.strip() or "unknown"
 
-    if not all([target_metric, target_direction, minimum_delta]):
+    if not all([target_metric, target_direction, minimum_delta is not None]):
         return reject(commit_hash, msg, "Incomplete intent declaration: need target_metric, target_direction, minimum_delta")
-
-    minimum_delta = float(minimum_delta)
 
     print(f"Intent: {target_direction} {target_metric} by at least {minimum_delta*100:.0f}%")
     if guardrails:
@@ -437,10 +608,22 @@ def verify(commit_hash):
     baseline_val = baseline[target_metric]
     result_val = result[target_metric]
 
+    if baseline_val == 0:
+        return reject(
+            commit_hash,
+            msg,
+            f"Target metric '{target_metric}' has zero baseline value; cannot compute relative delta.",
+            intent=intent_data,
+            baseline=baseline,
+            result=result,
+        )
+
     if target_direction == "decrease":
         actual_delta = (baseline_val - result_val) / baseline_val
-    else:
+    elif target_direction == "increase":
         actual_delta = (result_val - baseline_val) / baseline_val
+    else:
+        return reject(commit_hash, msg, f"Unsupported target_direction '{target_direction}'", intent=intent_data)
 
     target_met = actual_delta >= minimum_delta
     print(f"  {target_metric}: {baseline_val:.6f}s → {result_val:.6f}s")
@@ -575,18 +758,74 @@ def reject(commit_hash, msg, reason, intent=None, baseline=None, result=None):
     return verdict
 
 
+def _acquire_chain_lock(timeout_seconds=10.0, poll_interval=0.05):
+    """Acquire an exclusive lock via lock-file creation."""
+    deadline = time.time() + timeout_seconds
+    while True:
+        try:
+            fd = os.open(CHAIN_LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, str(os.getpid()).encode("utf-8"))
+            return fd
+        except FileExistsError:
+            if time.time() >= deadline:
+                raise RuntimeError(
+                    f"Timed out acquiring chain lock: {CHAIN_LOCK_FILE}"
+                )
+            time.sleep(poll_interval)
+
+
+def _release_chain_lock(lock_fd):
+    try:
+        os.close(lock_fd)
+    finally:
+        try:
+            os.unlink(CHAIN_LOCK_FILE)
+        except FileNotFoundError:
+            pass
+
+
+def _load_chain():
+    if not os.path.exists(CHAIN_FILE):
+        return []
+
+    with open(CHAIN_FILE, "r", encoding="utf-8") as f:
+        raw = f.read().strip()
+    if not raw:
+        return []
+
+    try:
+        chain = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"chain.json is not valid JSON: {exc}") from exc
+
+    if not isinstance(chain, list):
+        raise RuntimeError("chain.json must contain a JSON array.")
+    return chain
+
+
+def _atomic_write_chain(chain):
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".chain.", suffix=".json", dir=SCRIPT_DIR)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            json.dump(chain, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CHAIN_FILE)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
 def append_to_chain(verdict):
     """Append a verdict to chain.json."""
-    chain = []
-    if os.path.exists(CHAIN_FILE):
-        with open(CHAIN_FILE, "r") as f:
-            try:
-                chain = json.load(f)
-            except json.JSONDecodeError:
-                chain = []
-    chain.append(verdict)
-    with open(CHAIN_FILE, "w") as f:
-        json.dump(chain, f, indent=2)
+    lock_fd = _acquire_chain_lock()
+    try:
+        chain = _load_chain()
+        chain.append(verdict)
+        _atomic_write_chain(chain)
+    finally:
+        _release_chain_lock(lock_fd)
     print(f"Result written to chain.json ({len(chain)} entries)")
 
 
@@ -621,8 +860,11 @@ def main():
         if not os.path.exists(CHAIN_FILE):
             print("No chain.json found. No commits verified yet.")
             sys.exit(0)
-        with open(CHAIN_FILE, "r") as f:
-            chain = json.load(f)
+        try:
+            chain = _load_chain()
+        except RuntimeError as exc:
+            print(f"Error reading chain.json: {exc}")
+            sys.exit(1)
         accepted = sum(1 for v in chain if v.get("accepted"))
         rejected = len(chain) - accepted
         print(f"Chain: {len(chain)} proposed, {accepted} accepted, {rejected} rejected")

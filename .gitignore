@@ -4,3 +4,4 @@ chain.json
 reputation.json
 .worktrees/
 .commit-msg-tmp
+.claude/

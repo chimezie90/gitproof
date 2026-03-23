@@ -486,7 +486,9 @@ function handleFile(file) {
   const reader = new FileReader();
   reader.onload = e => {
     try {
-      chainData = JSON.parse(e.target.result);
+      const parsed = JSON.parse(e.target.result);
+      if (!Array.isArray(parsed)) throw new Error('chain.json must be an array');
+      chainData = parsed;
       render();
     } catch (err) {
       alert('Invalid JSON: ' + err.message);
@@ -498,7 +500,11 @@ function handleFile(file) {
 // Try to auto-load chain.json (works if served from same directory)
 fetch('chain.json')
   .then(r => r.ok ? r.json() : Promise.reject())
-  .then(data => { chainData = data; render(); })
+  .then(data => {
+    if (!Array.isArray(data)) throw new Error('chain.json must be an array');
+    chainData = data;
+    render();
+  })
   .catch(() => {});
 
 function render() {
@@ -537,7 +543,8 @@ function render() {
 
 function renderDAG() {
   const list = document.getElementById('dag-list');
-  list.innerHTML = '';
+  if (!list) return;
+  list.textContent = '';
 
   // Show newest first
   for (let i = chainData.length - 1; i >= 0; i--) {
@@ -553,23 +560,49 @@ function renderDAG() {
     node.className = `dag-node${selectedIdx === i ? ' selected' : ''}`;
     node.onclick = () => selectNode(i);
 
-    let deltaHtml = '';
-    if (delta !== undefined) {
-      const cls = v.accepted ? 'positive' : 'negative';
-      const sign = delta > 0 ? '+' : '';
-      deltaHtml = `<div class="dag-delta ${cls}">${sign}${delta}% ${targetDir === 'decrease' ? '(faster)' : '(higher)'}</div>`;
+    if (i < chainData.length - 1) {
+      const connector = document.createElement('div');
+      connector.className = 'dag-connector';
+      node.appendChild(connector);
     }
 
-    node.innerHTML = `
-      ${i < chainData.length - 1 ? '<div class="dag-connector"></div>' : ''}
-      <div class="dag-dot ${status}"></div>
-      <div class="dag-info">
-        <div class="dag-hash">${(v.commit || '').slice(0, 12)}${v.author ? ` <span style="color:var(--text-dim)">by ${escHtml(v.author)}</span>` : ''}</div>
-        <div class="dag-target">${targetMetric}</div>
-        ${deltaHtml}
-        <div class="dag-time">${v.timestamp || ''}</div>
-      </div>
-    `;
+    const dot = document.createElement('div');
+    dot.className = `dag-dot ${status}`;
+    node.appendChild(dot);
+
+    const info = document.createElement('div');
+    info.className = 'dag-info';
+
+    const hashLine = document.createElement('div');
+    hashLine.className = 'dag-hash';
+    hashLine.textContent = (v.commit || '').slice(0, 12);
+    if (v.author) {
+      const authorSpan = document.createElement('span');
+      authorSpan.style.color = 'var(--text-dim)';
+      authorSpan.textContent = ` by ${String(v.author)}`;
+      hashLine.appendChild(authorSpan);
+    }
+    info.appendChild(hashLine);
+
+    const target = document.createElement('div');
+    target.className = 'dag-target';
+    target.textContent = String(targetMetric);
+    info.appendChild(target);
+
+    if (delta !== undefined) {
+      const deltaLine = document.createElement('div');
+      deltaLine.className = `dag-delta ${v.accepted ? 'positive' : 'negative'}`;
+      const sign = delta > 0 ? '+' : '';
+      deltaLine.textContent = `${sign}${delta}% ${targetDir === 'decrease' ? '(faster)' : '(higher)'}`;
+      info.appendChild(deltaLine);
+    }
+
+    const time = document.createElement('div');
+    time.className = 'dag-time';
+    time.textContent = String(v.timestamp || '');
+    info.appendChild(time);
+
+    node.appendChild(info);
     list.appendChild(node);
   }
 }
@@ -582,82 +615,181 @@ function selectNode(idx) {
 
 function renderDetail(v) {
   const panel = document.getElementById('detail-panel');
+  if (!panel) return;
+  panel.textContent = '';
+
   const intent = v.intent || {};
   const innerIntent = intent.intent || {};
-  const guardrails = intent.guardrails || [];
+  const guardrails = Array.isArray(intent.guardrails) ? intent.guardrails : [];
   const status = v.accepted ? 'accepted' : 'rejected';
 
-  let html = `<h2>Commit Detail</h2>`;
+  const header = document.createElement('h2');
+  header.textContent = 'Commit Detail';
+  panel.appendChild(header);
 
   // Status badge
-  html += `<div class="detail-section">
-    <span class="intent-badge ${status}">${status.toUpperCase()}</span>
-    <span style="margin-left: 12px; font-family: var(--mono); font-size: 13px; color: var(--accent);">${(v.commit || '').slice(0, 12)}</span>
-  </div>`;
+  const statusSection = document.createElement('div');
+  statusSection.className = 'detail-section';
+  const badge = document.createElement('span');
+  badge.className = `intent-badge ${status}`;
+  badge.textContent = status.toUpperCase();
+  statusSection.appendChild(badge);
+  const commitSpan = document.createElement('span');
+  commitSpan.style.marginLeft = '12px';
+  commitSpan.style.fontFamily = 'var(--mono)';
+  commitSpan.style.fontSize = '13px';
+  commitSpan.style.color = 'var(--accent)';
+  commitSpan.textContent = (v.commit || '').slice(0, 12);
+  statusSection.appendChild(commitSpan);
+  panel.appendChild(statusSection);
 
   // Author
   if (v.author) {
-    html += `<div class="detail-section">
-      <h3>Author</h3>
-      <div class="metric-row">
-        <span class="metric-name">${escHtml(v.author)}</span>
-        <span class="metric-values"><span class="metric-change neutral">${getRepBadge(v.author)}</span></span>
-      </div>
-    </div>`;
+    const authorSection = document.createElement('div');
+    authorSection.className = 'detail-section';
+    const authorTitle = document.createElement('h3');
+    authorTitle.textContent = 'Author';
+    authorSection.appendChild(authorTitle);
+
+    const row = document.createElement('div');
+    row.className = 'metric-row';
+    const name = document.createElement('span');
+    name.className = 'metric-name';
+    name.textContent = String(v.author);
+    row.appendChild(name);
+    const values = document.createElement('span');
+    values.className = 'metric-values';
+    const change = document.createElement('span');
+    change.className = 'metric-change neutral';
+    change.textContent = getRepBadge(v.author);
+    values.appendChild(change);
+    row.appendChild(values);
+    authorSection.appendChild(row);
+    panel.appendChild(authorSection);
   }
 
   // Intent
-  html += `<div class="detail-section">
-    <h3>Intent Declaration</h3>
-    <div class="metric-row">
-      <span class="metric-name">Target</span>
-      <span class="metric-values"><span class="metric-change neutral">${innerIntent.target_metric || '?'}</span></span>
-    </div>
-    <div class="metric-row">
-      <span class="metric-name">Direction</span>
-      <span class="metric-values"><span class="metric-change neutral">${innerIntent.target_direction || '?'}</span></span>
-    </div>
-    <div class="metric-row">
-      <span class="metric-name">Min Delta</span>
-      <span class="metric-values"><span class="metric-change neutral">${innerIntent.minimum_delta ? (innerIntent.minimum_delta * 100).toFixed(0) + '%' : '?'}</span></span>
-    </div>
-  </div>`;
+  const intentSection = document.createElement('div');
+  intentSection.className = 'detail-section';
+  const intentTitle = document.createElement('h3');
+  intentTitle.textContent = 'Intent Declaration';
+  intentSection.appendChild(intentTitle);
+
+  const intentRows = [
+    ['Target', innerIntent.target_metric ?? '?'],
+    ['Direction', innerIntent.target_direction ?? '?'],
+    [
+      'Min Delta',
+      Number.isFinite(Number(innerIntent.minimum_delta))
+        ? `${(Number(innerIntent.minimum_delta) * 100).toFixed(0)}%`
+        : '?',
+    ],
+  ];
+
+  intentRows.forEach(([label, value]) => {
+    const row = document.createElement('div');
+    row.className = 'metric-row';
+    const name = document.createElement('span');
+    name.className = 'metric-name';
+    name.textContent = label;
+    const values = document.createElement('span');
+    values.className = 'metric-values';
+    const change = document.createElement('span');
+    change.className = 'metric-change neutral';
+    change.textContent = String(value);
+    values.appendChild(change);
+    row.appendChild(name);
+    row.appendChild(values);
+    intentSection.appendChild(row);
+  });
+  panel.appendChild(intentSection);
 
   // Rejection reasons
   if (v.rejection_reasons && v.rejection_reasons.length) {
-    html += `<div class="detail-section">
-      <h3>Rejection Reasons</h3>
-      <ul class="reason-list">${v.rejection_reasons.map(r => `<li>${escHtml(r)}</li>`).join('')}</ul>
-    </div>`;
+    const reasonsSection = document.createElement('div');
+    reasonsSection.className = 'detail-section';
+    const reasonsTitle = document.createElement('h3');
+    reasonsTitle.textContent = 'Rejection Reasons';
+    reasonsSection.appendChild(reasonsTitle);
+    const list = document.createElement('ul');
+    list.className = 'reason-list';
+    v.rejection_reasons.forEach(reason => {
+      const item = document.createElement('li');
+      item.textContent = String(reason);
+      list.appendChild(item);
+    });
+    reasonsSection.appendChild(list);
+    panel.appendChild(reasonsSection);
   }
 
   // Metric deltas
   if (v.deltas) {
-    const declaredGuardrails = new Set(guardrails.map(g => g.metric));
-    html += `<div class="detail-section"><h3>Metric Deltas</h3>`;
-    for (const [metric, d] of Object.entries(v.deltas)) {
+    const declaredGuardrails = new Set(guardrails.map(g => g && g.metric).filter(Boolean));
+    const deltasSection = document.createElement('div');
+    deltasSection.className = 'detail-section';
+    const deltasTitle = document.createElement('h3');
+    deltasTitle.textContent = 'Metric Deltas';
+    deltasSection.appendChild(deltasTitle);
+
+    for (const [metric, d] of Object.entries(v.deltas || {})) {
+      if (!d || typeof d !== 'object') continue;
       const changePct = d.change_pct;
       let cls = 'neutral';
       if (Math.abs(changePct) > 1) cls = changePct < 0 ? 'improved' : 'regressed';
 
-      let tags = '';
-      if (metric === innerIntent.target_metric) tags += '<span class="target-tag">TARGET</span>';
-      if (declaredGuardrails.has(metric)) tags += '<span class="guardrail-tag">GUARDRAIL</span>';
       const isAnomaly = (v.anomalies || []).some(a => a.metric === metric);
-      if (isAnomaly) tags += '<span class="anomaly-tag">ANOMALY</span>';
+      const row = document.createElement('div');
+      row.className = 'metric-row';
 
-      html += `<div class="metric-row">
-        <span class="metric-name">${metric}${tags}</span>
-        <span class="metric-values">
-          <div class="metric-change ${cls}">${changePct > 0 ? '+' : ''}${changePct}%</div>
-          <div class="metric-abs">${d.baseline.toFixed(4)}s → ${d.result.toFixed(4)}s</div>
-        </span>
-      </div>`;
+      const name = document.createElement('span');
+      name.className = 'metric-name';
+      name.textContent = String(metric);
+
+      if (metric === innerIntent.target_metric) {
+        const tag = document.createElement('span');
+        tag.className = 'target-tag';
+        tag.textContent = 'TARGET';
+        name.appendChild(tag);
+      }
+      if (declaredGuardrails.has(metric)) {
+        const tag = document.createElement('span');
+        tag.className = 'guardrail-tag';
+        tag.textContent = 'GUARDRAIL';
+        name.appendChild(tag);
+      }
+      if (isAnomaly) {
+        const tag = document.createElement('span');
+        tag.className = 'anomaly-tag';
+        tag.textContent = 'ANOMALY';
+        name.appendChild(tag);
+      }
+
+      const values = document.createElement('span');
+      values.className = 'metric-values';
+
+      const change = document.createElement('div');
+      change.className = `metric-change ${cls}`;
+      const changeNum = Number(changePct);
+      change.textContent = `${changeNum > 0 ? '+' : ''}${Number.isFinite(changeNum) ? changeNum : 0}%`;
+      values.appendChild(change);
+
+      const abs = document.createElement('div');
+      abs.className = 'metric-abs';
+      const baseline = Number(d.baseline);
+      const result = Number(d.result);
+      if (Number.isFinite(baseline) && Number.isFinite(result)) {
+        abs.textContent = `${baseline.toFixed(4)}s → ${result.toFixed(4)}s`;
+      } else {
+        abs.textContent = 'n/a';
+      }
+      values.appendChild(abs);
+
+      row.appendChild(name);
+      row.appendChild(values);
+      deltasSection.appendChild(row);
     }
-    html += `</div>`;
+    panel.appendChild(deltasSection);
   }
-
-  panel.innerHTML = html;
 }
 
 function getRepBadge(author) {
@@ -694,7 +826,8 @@ function renderCharts() {
     if (v.result) Object.keys(v.result).forEach(k => metrics.add(k));
   });
 
-  grid.innerHTML = '';
+  grid.textContent = '';
+  let metricIdx = 0;
   for (const metric of metrics) {
     const card = document.createElement('div');
     card.className = 'chart-card';
@@ -714,15 +847,26 @@ function renderCharts() {
     const changePct = firstVal ? ((lastVal - firstVal) / firstVal * 100).toFixed(1) : 0;
     const improved = lastVal < firstVal;
 
-    card.innerHTML = `
-      <h3>${metric}</h3>
-      <div class="chart-subtitle">${improved ? 'Improved' : 'Changed'} ${Math.abs(changePct)}% over ${points.length} commits</div>
-      <canvas class="chart-canvas" id="chart-${metric}"></canvas>
-    `;
+    const title = document.createElement('h3');
+    title.textContent = String(metric);
+    card.appendChild(title);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'chart-subtitle';
+    subtitle.textContent = `${improved ? 'Improved' : 'Changed'} ${Math.abs(changePct)}% over ${points.length} commits`;
+    card.appendChild(subtitle);
+
+    const canvas = document.createElement('canvas');
+    canvas.className = 'chart-canvas';
+    const canvasId = `chart-${metricIdx}-${String(metric).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+    canvas.id = canvasId;
+    card.appendChild(canvas);
+
     grid.appendChild(card);
 
     // Draw mini chart
-    requestAnimationFrame(() => drawChart(`chart-${metric}`, points));
+    requestAnimationFrame(() => drawChart(canvasId, points));
+    metricIdx += 1;
   }
 }
 
@@ -787,12 +931,6 @@ function drawChart(canvasId, points) {
 
 // Helper to avoid the var() in JS
 const var_bg = '#0a0a0f';
-
-function escHtml(s) {
-  const div = document.createElement('div');
-  div.textContent = s;
-  return div.innerHTML;
-}
 </script>
 </body>
 </html>

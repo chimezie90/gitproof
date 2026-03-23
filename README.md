@@ -137,6 +137,29 @@ python3 reputation.py author agent-7
 python3 reputation.py check agent-7 thresholds
 ```
 
+## Sandboxed Verification Mode
+
+`verifier.py` supports sandboxed execution for untrusted benchmark code.
+
+```bash
+# Legacy/local execution (NOT for untrusted workers)
+export GITPROOF_SANDBOX_MODE=local
+
+# Container sandbox (recommended for untrusted workers; requires Docker)
+export GITPROOF_SANDBOX_MODE=docker
+export GITPROOF_SANDBOX_DOCKER_IMAGE=python:3.12-slim
+
+# Custom wrapper/VM runner (runner receives the python command appended)
+export GITPROOF_SANDBOX_MODE=custom
+export GITPROOF_SANDBOX_RUNNER="/path/to/your-sandbox-wrapper"
+```
+
+Then run verification normally:
+
+```bash
+python3 verifier.py verify <commit-hash>
+```
+
 ## How It Works
 
 The verification protocol has four layers of defense:
